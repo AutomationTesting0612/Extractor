@@ -4,6 +4,11 @@ import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,10 +16,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.BufferedWriter;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.Reader;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -26,6 +28,8 @@ import java.util.stream.Stream;
 @Controller
 public class CsvController {
 
+    private Path lastGeneratedFile;
+
     @GetMapping("/")
     public String uploadPage() {
         return "upload";
@@ -36,6 +40,7 @@ public class CsvController {
                                  @RequestParam("columns") String columnInput,
                                  @RequestParam("url") String url,
                                  Model model) throws IOException {
+
         List<String> columns = Arrays.stream(columnInput.split(","))
                 .map(String::trim)
                 .filter(c -> !c.isEmpty())
@@ -46,12 +51,10 @@ public class CsvController {
             return "upload";
         }
 
-        String userHome = System.getProperty("user.home");
-        Path downloadsDir = Paths.get(userHome, "Downloads");
-        Files.createDirectories(downloadsDir);
-
+        Path tempDir = Files.createTempDirectory("csv-output");
         String outputFileName = "filtered_" + System.currentTimeMillis() + ".csv";
-        Path outputPath = downloadsDir.resolve(outputFileName);
+        Path outputPath = tempDir.resolve(outputFileName);
+        this.lastGeneratedFile = outputPath;
 
         try (
                 Reader reader = new InputStreamReader(file.getInputStream());
@@ -61,6 +64,7 @@ public class CsvController {
                         CSVFormat.DEFAULT.withHeader(
                                 Stream.concat(columns.stream(), Stream.of("URL")).toArray(String[]::new))
                 )) {
+
             for (CSVRecord record : parser) {
                 List<String> values = new ArrayList<>();
                 for (String col : columns) {
@@ -69,13 +73,27 @@ public class CsvController {
                 values.add(url);
                 printer.printRecord(values);
             }
+
         } catch (IllegalArgumentException | IOException e) {
             model.addAttribute("message", "Error: " + e.getMessage());
             return "upload";
         }
 
         model.addAttribute("message", "CSV processed successfully!");
-        model.addAttribute("path", outputPath.toAbsolutePath().toString());
+        model.addAttribute("downloadLink", "/download");
         return "upload";
+    }
+
+    @GetMapping("/download")
+    public ResponseEntity<Resource> downloadCsv() throws IOException {
+        if (lastGeneratedFile == null || !Files.exists(lastGeneratedFile)) {
+            return ResponseEntity.notFound().build();
+        }
+
+        InputStreamResource resource = new InputStreamResource(new FileInputStream(lastGeneratedFile.toFile()));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + lastGeneratedFile.getFileName())
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(resource);
     }
 }
